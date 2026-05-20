@@ -88,5 +88,275 @@ NEGATIVE_THRESHOLD = -0.05
 class AspectResult:
 
     aspect: str
-    sentiment: str          # "POSITIVE
+    sentiment: str          # "POSITIVE" | "NEUTRAL" | "NEGATIVE"
+    score: float            # VADER compound score in [-1, +1]
+    confidence: str         # "HIGH" | "MEDIUM" | "LOW"
+    source: str             # The clause that the aspect was found in
+
+@dataclass
+class SentenceResult:
+
+    text:                   str
+    aspects:                list[AspectResult] = field(default_factory=list)
+    overall_label:          Optional[str] = None  # Overall Vader sentiment
+    overall_score:          Optional[float] = None
+
+# --------------------------------------------------------------------------------
+# 4. Core ABSA Engine
+# --------------------------------------------------------------------------------
+class ABSAAnalyser:
+
+    def __init__(
+            self,
+            taxonomy: dict[str, list[str]] |None = None,
+            positive_threshold: float = POSITIVE_THRESHOLD,
+            negative_threshold: float = NEGATIVE_THRESHOLD,
+    ) -> None:
+        self._vader = SentimentIntensityAnalyzer()
+        self._taxonomy = taxonomy or ASPECT_TAXONOMY
+        self._pos_thr = positive_threshold
+        self._neg_thr = negative_threshold
+
+        # Pre-compile patterns: Longest keywords first to avoid partial matches
+        # e.g. "battery life" must be checked before "battery"
+        self._patterns: dict[str, list[re.Pattern[str]]] = {}
+        for aspect, keywords in self._taxonomy.items():
+            sorted_kw = sorted(keywords, key=len, reverse=True)
+            self._patterns[aspect] = [
+                re.compile(rf"\b{re.escape(kw)}\b",re.IGNORECASE) for kw in sorted_kw
+            ]
+
+    # --------------------------------------------------------------------------------
+    # Public API
+    # --------------------------------------------------------------------------------
+    def analyze(self, text: str) -> SentenceResult:
+
+        result = SentenceResult(text=text)
+
+        # Overall sentence-level sentiment
+        overall_scores = self._vader.polarity_scores(text)
+        result.overall_score = overall_scores['compound']
+        result.overall_label = self._label(result.overall_score)
+
+        # Split into clauses so sentiments don't bleed across aspects
+        clauses = self._split_clauses(text)
+
+        # Match aspects to clauses and score each
+        seen_aspects: set[str] = set()
+        for clause in clauses:
+            for aspect, patterns in self._patterns.items():
+                if aspect in seen_aspects:
+                    continue
+                for pattern in patterns:
+                    if pattern.search(clause):
+                        scores = self._vader.polarity_scores(clause)
+                        compound = scores["compound"]
+                        sentiment = self._label(compound)
+                        confidence = self._confidence(compound)
+                        result.aspects.append(
+                            AspectResult(
+                                aspect=aspect,
+                                sentiment=sentiment,
+                                score=compound,
+                                confidence=confidence,
+                                source=clause.strip(),
+                            )
+                        )
+                        seen_aspects.add(aspect)
+                        break # Stop checking other keywords for this aspect
+
+        return result
+
+    def analyze_batch(self,texts: list[str]) -> list[SentenceResult]:
+
+        return [self.analyze(t) for t in texts]
+
+    # --------------------------------------------------------------------------------
+    # Private helpers
+    # --------------------------------------------------------------------------------
+    @staticmethod
+    def _split_clauses(text: str) -> list[str]:
+
+        # Primary split on contrastive/additive connectors
+        parts = re.split(
+            r"\s*(?:but|however|although|though|yet|while|;|,)\s*",
+            text,
+            flags=re.IGNORECASE,
+        )
+        # Secondary split: "and the/a/an …" — new noun phrase starting
+        clauses: list[str] = []
+        for part in parts:
+            sub = re.split(
+                r"\s+and\s+(?=(?:the|a|an|this|its|my|their)\s)",
+                part,
+                flags=re.IGNORECASE,
+            )
+            clauses.extend(sub)
+
+        return [c.strip() for c in clauses if c.strip()]
+
+    def _label(self, compound: float) -> str:
+
+        if compound >= self._pos_thr:
+            return "POSITIVE"
+        if compound <= self._neg_thr:
+            return "NEGATIVE"
+        return "NEUTRAL"
+
+    @staticmethod
+    def _confidence(compound: float) -> str:
+
+        abs_score = abs(compound)
+        if abs_score >= .5:
+            return "HIGH"
+        if abs_score >= .2:
+            return "MEDIUM"
+        return "LOW"
+
+# --------------------------------------------------------------------------------
+# 5. Display Helpers
+# --------------------------------------------------------------------------------
+
+_SENTIMENT_SYMBOLS = {"POSITIVE": "✓", "NEGATIVE": "✗", "NEUTRAL": "~"}
+_SENTIMENT_COLORS  = {
+    "POSITIVE": "\033[32m",   # green
+    "NEGATIVE": "\033[31m",   # red
+    "NEUTRAL":  "\033[33m",   # yellow
+}
+_RESET = "\033[0m"
+_BOLD  = "\033[1m"
+
+def _colorize(text: str, color_code:str) -> str:
+
+    return f"{color_code}{text}{_RESET}"
+
+def print_result(result: SentenceResult, show_clause: bool = False) -> None:
+
+    width = 72
+    print("\n" + '-' * width)
+    print(f"{_BOLD}TEXT:{_RESET} {result.text}")
+
+    if result.overall_label:
+        sym = _SENTIMENT_SYMBOLS[result.overall_label]
+        color = _SENTIMENT_COLORS[result.overall_label]
+        label = _colorize(f"{sym} {result.overall_label}", color)
+        print(f" Overall sentence sentiment: {label} "
+              f"(score: {result.overall_score:+.3f})")
+
+    if not result.aspects:
+        print("\n ⚠ No known product aspects detected.")
+        return
+
+    print(f"\n  {'Aspect':<16}  {'Sentiment':<10}  {'Conf.':<8}  {'Score':>7}")
+    print(f"  {'─' * 15}  {'─' * 9}  {'─' * 7}  {'─' * 7}")
+    for r in result.aspects:
+        sym = _SENTIMENT_SYMBOLS[r.sentiment]
+        color = _SENTIMENT_COLORS[r.sentiment]
+        label = _colorize(f"{sym} {r.sentiment:<9}", color)
+        print(f"  {r.aspect:<16}  {label}  {r.confidence:<8}  {r.score:+.3f}")
+        if show_clause:
+            wrapped = textwrap.fill(
+                f'"{r.source}"',
+                width=width - 22,
+                subsequent_indent=" " * 22,
+            )
+            print(f"  {'':16}  ↳ clause: {wrapped}")
+
+def print_summary_table(results: list[SentenceResult]) -> None:
+
+    width = 72
+    print("\n" + '-' * width)
+    print(f"{_BOLD} BATCH SUMMARY:{_RESET}")
+    print("-" * width)
+    for n, result in enumerate(results, start=1):
+        short = (result.text[:55] + "-") if len(result.text) > 55 else result.text
+        print(f"\n [{n}] {short}")
+        if result.aspects:
+            parts = []
+            for r in result.aspects:
+                sym = _SENTIMENT_SYMBOLS[r.sentiment]
+                color = _SENTIMENT_COLORS[r.sentiment]
+                parts.append(_colorize(f"{sym} {r.aspect}", color))
+            print("     " + "  |  ".join(parts))
+
+        else:
+            print("         ⚠ No aspects found")
+    print("-" * width)
+
+# --------------------------------------------------------------------------------
+# 6. Demo sentences
+# --------------------------------------------------------------------------------
+DEMO_SENTENCES = [
+    # Clear multi-aspect contrasts
+    "The battery life is excellent but the screen is disappointing.",
+    "Camera quality is stunning and the performance is incredibly fast.",
+    "Battery life is awful and the price is way too high.",
+
+    # Mixed service + storage
+    "Customer service was amazing, though the storage is far too limited.",
+
+    # Audio vs screen
+    "The display is absolutely gorgeous but the audio sounds terrible.",
+
+    # Mild / neutral tones
+    "Build quality feels decent and the camera is okay for the price.",
+    "The service was acceptable, nothing special.",
+
+    # Edge cases
+    "The weather is nice today.",          # no product aspects → graceful output
+    "Everything about this phone is perfect.",  # vague, no specific aspect keyword
+]
+
+# --------------------------------------------------------------------------------
+# 7. Main Execution Function
+# --------------------------------------------------------------------------------
+def main() -> None:
+    width = 72
+    print("\n" + '-' * width)
+    print(f"{_BOLD} ASPECT-BASED SENTIMENT ANALYSIS(ABSA) DEMONSTRATION:{_RESET}")
+    print(f"Compatible with Python 3.12 + | VADER")
+    print("-" * width)
+
+    analyzer = ABSAAnalyser()
+
+    # --------------------------------------------------------------------------------
+    # Section i. Detailed per-sentence analysis
+    # --------------------------------------------------------------------------------
+    print(f"\n{_BOLD} -- DETAILED ANALYSIS (with source clauses) -- {_RESET}")
+    for sentence in DEMO_SENTENCES:
+        result = analyzer.analyze(sentence)
+        print_result(result, show_clause=True)
+
+    # --------------------------------------------------------------------------------
+    # Section ii. Batch Summary
+    # --------------------------------------------------------------------------------
+    results = analyzer.analyze_batch(DEMO_SENTENCES)
+    print_summary_table(results)
+
+    # --------------------------------------------------------------------------------
+    # Section iii. Optional interactive section
+    # --------------------------------------------------------------------------------
+    print(f"\n{_BOLD} -- INTERACTIVE MODE -- {_RESET}")
+    print(" Type a sentence to analyse it, or press <Enter> to exit.\n")
+
+    while True:
+        try:
+            user_input = input("   Enter text to be analyzed: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+
+        if not user_input:
+            print("  Exiting interactive mode.")
+            break
+
+        result = analyzer.analyze(user_input)
+        print_result(result, show_clause=True)
+    print(f"\n{_BOLD} -- [DONE] : {_RESET} ABSA demo complete.\n")
+
+# --------------------------------------------------------------------------------
+# 8. Run the script by invoking it's main() function
+# --------------------------------------------------------------------------------
+if __name__ == "__main__":
+    main()
+
 
