@@ -236,7 +236,7 @@ def print_entities_rich_table(doc) -> None:
     console = Console()
     table = Table(
         title="Named Entities Detected",
-        box=rich.box.ROUNDED,
+        box=rich_box.ROUNDED,
         header_style="bold cyan",
         show_lines=True,
     )
@@ -263,7 +263,7 @@ def print_entities_rich_table(doc) -> None:
 
     for n, ent in enumerate(doc.ents, start=1):
         description = spacy.explain(ent.label_) or "-"
-        colour = label_colours.get([ent.label_, "white"])
+        colour = label_colours.get(ent.label_, "white")
         table.add_row(
             str(n),
             f"[{colour}]{ent.text}[/{colour}]",
@@ -333,3 +333,50 @@ def print_summary(doc) -> None:
             description = spacy.explain(label) or "-"
             bar ="█" * count
             print(f"    {label:<12} {count:>3}  {bar}  ({description})")
+
+# --------------------------------------------------------------------------------
+# 7. Main Execution Function
+# --------------------------------------------------------------------------------
+def main() -> None:
+    """
+    Run the full NER demonstration pipeline.
+
+    1. Load the medium spaCy English model
+    2. Process the sample text through the pipeline
+    3. Print the entities in sequential (flat) order
+    4. Print the entities grouped by entity type
+    5. Optionally render a rich table (if the 'rich' module is installed).
+    6. Print summary statistics.
+    7. Save displaCy HTML visualisation to disk.
+    """
+    print(__doc__) # Print the module's documentation string as an introduction banner
+
+    # Step 1. Load the model
+    nlp = load_nlp_model("en_core_web_md")
+
+    # Step 2. Run the pipeline
+    print(f"[INFO]  Processing {len(SAMPLE_TEXT.split())} words...")
+    doc = run_ner(nlp, SAMPLE_TEXT)
+
+    # Step 3. Sequential Entity List
+    print_entities_flat(doc)
+
+    # Step 4. Group by label
+    print_entities_grouped(doc)
+
+    # Step 5. Optional rich table (degrades gracefully when 'rich' isn't available
+    print_entities_rich_table(doc)
+
+    # Step 6. Summary Statistics
+    print_summary(doc)
+
+    # Step 7. displaCy HTML
+    save_displacy_html(doc, output_path="../files/ner_displacy.html")
+
+    print("\n[INFO]  Done. NER Demo Complete.")
+
+# --------------------------------------------------------------------------------
+# 8. Run the script by invoking it's main() function
+# --------------------------------------------------------------------------------
+if __name__ == "__main__":
+    main()
