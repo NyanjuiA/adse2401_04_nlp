@@ -567,5 +567,230 @@ class TranslationEvaluator:
         print(f"  chrF   : {scores['chrf']:>7.2f}  (0–100; higher = better)")
         print(f"{'─' * 55}\n")
 
+# --------------------------------------------------------------------------------
+# 6. Visualisation class
+# --------------------------------------------------------------------------------
+class TranslationVisualiser:
+
+    # Colour pattern inspired by Kenyan and Scottish flag from translation text
+    COLOURS: dict[str, str] = {
+        "RBMT": "#006600", # Forest Green (Kenyan Flag)
+        "NBMT": "#003087", # Royal Blue (Scotland)
+    }
+
+    def plot_comparison(
+            self,
+            rbmt_scores: dict[str, float],
+            nbmt_scores: dict[str, float],
+            save_path: str = "../files/mt_comparison.png",
+    )-> None:
+        # Normalise all scores to 0-100 for comparable visualisation
+        metrics: list[str] = ["BLEU", "ROUGE-1", "ROUGE-L", "chrF"]
+        rbmt_vals: list[float] = [
+            rbmt_scores["bleu"],
+            rbmt_scores["rouge1"] * 100,
+            rbmt_scores["rougeL"] * 100,
+            rbmt_scores["chrf"],
+        ]
+        nbmt_vals: list[float] = [
+            nbmt_scores["bleu"],
+            nbmt_scores["rouge1"] * 100,
+            nbmt_scores["rougeL"] * 100,
+            nbmt_scores["chrf"],
+        ]
+
+        x: np.ndarray = np.arange(len(metrics))
+        width:float = 0.35
+
+        fig, ax = plt.subplots(figsize=(10,6))
+        fig.patch.set_facecolor('#f9f9f9')
+        ax.set_facecolor('#f4f4f4')
+
+        bars_rbmt = ax.bar(
+            x - width / 2, rbmt_vals, width,
+            label="RBMT", color=self.COLOURS["RBMT"], alpha=0.88,edgecolor="white"
+        )
+        bars_nbmt = ax.bar(
+            x + width / 2, nbmt_vals, width,
+            label="NBMT (MarianMT)", color=self.COLOURS["NBMT"], alpha=0.88,edgecolor="white"
+        )
+
+        # Annotate bars with numeric values
+        for bar in list(bars_rbmt) + list(bars_nbmt):
+            height: float = bar.get_height()
+            ax.annotate(
+                f"{height:.1f}",
+                xy=(bar.get_x() + bar.get_width() / 2, height),
+                xytext=(0,4),
+                textcoords="offset points",
+                ha="center", va="bottom",
+                fontsize=9, fontweight="bold",
+            )
+
+        ax.set_xlabel("Evaluation Metric", fontsize=12, labelpad=10)
+        ax.set_ylabel("Score (normalised to 0-100", fontsize=12, labelpad=10)
+        ax.set_title(
+            "Machine Translation Evaluation\nRBMT vs. NBMT (English -> Kiswahili)",
+            fontsize=14, fontweight="bold", pad=15,
+        )
+        ax.set_xticks(x)
+        ax.set_xticklabels(metrics, fontsize=11)
+        ax.set_ylim(0,110)
+        ax.yaxis.grid(True, linestyle="--", alpha=0.6)
+        ax.set_axisbelow(True)
+
+        legend_patches = [
+            mpatches.Patch(color=self.COLOURS["RBMT"], label="RBMT (Rule-Based)"),
+            mpatches.Patch(color=self.COLOURS["NBMT"], label="NBMT (MarianMT) Neural"),
+        ]
+        ax.legend(handles=legend_patches, fontsize=10, loc="upper right")
+
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"\n[VIS] Chart saved to {save_path}")
+        plt.show()
+
+# --------------------------------------------------------------------------------
+# 7. Display utilities
+# --------------------------------------------------------------------------------
+def print_translation_comparison(
+        source: str,
+        rbmt_output: str,
+        nbmt_output: str,
+        paragraph_idx: int,
+)-> None:
+
+    width: int = 78
+    wrapper = textwrap.TextWrapper(width=width,subsequent_indent=" ")
+
+    print("\n" + "=" * width)
+    print(f"  PARAGRAPH: {paragraph_idx}")
+    print("=" * width)
+
+    print("\n▶ SOURCE (English):")
+    print(" " + "\n ".join(wrapper.wrap(source)))
+
+    print("\n▶ RBMT Translation (Kiswahili):")
+    print(" " + "\n ".join(wrapper.wrap(rbmt_output)))
+
+    print("\n▶ NBMT Translation (Kiswahili - MarianMT):")
+    print(" " + "\n ".join(wrapper.wrap(nbmt_output)))
+
+    print("\n" + "=" * width)
+
+# --------------------------------------------------------------------------------
+# 8. Main Execution Function
+# --------------------------------------------------------------------------------
+def main() -> None:
+
+    print("\n" + "█" * 78)
+    print("  MACHINE TRANSLATION DEMO - English -> Kiswahili")
+    print("\n" + "█" * 78)
+
+    # ------------------------------------------------------------------
+    # Initialise systems
+    # ------------------------------------------------------------------
+    rbmt: RuleBasedTranslator = RuleBasedTranslator()
+    nbmt: NeuralTranslator = NeuralTranslator()
+    evaluator: TranslationEvaluator = TranslationEvaluator()
+
+    rbmt_all_translations: list[str] = []
+    nbmt_all_translations: list[str] = []
+    rbmt_scores_all: list[dict[str, float]] = []
+    nbmt_scores_all: list[dict[str, float]] = []
+
+    # ------------------------------------------------------------------
+    # Translate and evaluate paragraph by paragraph
+    # ------------------------------------------------------------------
+    for idx, (source, reference) in enumerate(
+        zip(SOURCE_PARAGRAPHS, REFERENCE_TRANSLATION), start=1
+    ):
+        print(f"\n{'.'*78}")
+        print(f" Processing Paragraph {idx} _")
+        print(f"\n{'.'*78}")
+
+        # --- RBMT ---
+        print("\n[RBMT] Translating _")
+        rbmt_translation: str =  rbmt.translate(source)
+        rbmt_all_translations.append(rbmt_translation)
+
+        # --- NBMT ---
+        print("\n[NBMT] Translating _")
+        nbmt_translation: str = nbmt.translate(source)
+        nbmt_all_translations.append(nbmt_translation)
+
+        # --- Display ---
+        print_translation_comparison(source, rbmt_translation, nbmt_translation, idx)
+
+        # --- Evaluate ---
+        print(f"\n -- Evaluate Paragraph {idx} --")
+        rbmt_sc = evaluator.compute(rbmt_translation, reference, f"RBMT P{idx}")
+        nbmt_sc = evaluator.compute(nbmt_translation, reference, f"NBMT P{idx}")
+        rbmt_scores_all.append(rbmt_sc)
+        nbmt_scores_all.append(nbmt_sc)
+
+    # ------------------------------------------------------------------
+    # Aggreate scores (macro-average across paragraphs)
+    # ------------------------------------------------------------------
+    def avg_scores(score_list: list[dict[str, float]]) -> dict[str, float]:
+
+        keys: list[str] = list(score_list[0].keys())
+        return {k: round(sum(s[k] for s in score_list) / len(score_list),4) for k in keys}
+
+    rbmt_avg: dict[str, float] = avg_scores(rbmt_scores_all)
+    nbmt_avg: dict[str, float] = avg_scores(nbmt_scores_all)
+
+    print("\n\n" + "█" * 78)
+    print("  OVERALL EVALUATION (Macro-average across all paragraphs)")
+    print("\n" + "█" * 78)
+    evaluator._print_scores("RBMT - Overall Average", rbmt_avg)
+    evaluator._print_scores("NBMT - Overall Average", nbmt_avg)
+
+    # ------------------------------------------------------------------
+    # Visualisation
+    # ------------------------------------------------------------------
+    visualiser: TranslationVisualiser = TranslationVisualiser()
+    visualiser.plot_comparison(
+        rbmt_avg, nbmt_avg
+    )
+
+    # ------------------------------------------------------------------
+    # Optional summary on RBMT & NMBT
+    # ------------------------------------------------------------------
+    print("\n" + "█" * 78)
+    print("  DISCUSSION SUMMARY")
+    print("█" * 78)
+    print(
+        textwrap.fill(
+            "RBMT provides transparent, deterministic translations grounded "
+            "in explicit linguistic knowledge. Its scores are typically lower "
+            "because it cannot model contextual meaning, long-range grammatical "
+            "agreement, or idiomatic expressions. It is, however, easy to "
+            "inspect, debug, and extend for domain-specific terminology.",
+            width=78,
+        )
+    )
+    print()
+    print(
+        textwrap.fill(
+            "NBMT (MarianMT) achieves substantially higher scores on all metrics "
+            "by learning translation patterns from large parallel corpora. The "
+            "model captures morphological agreement, word order differences, and "
+            "contextual nuance. Its main limitations are opacity (a 'black-box' "
+            "model), dependence on training data, and potential errors on "
+            "low-resource language pairs.",
+            width=78,
+        )
+    )
+    print("\n" + "█" * 78 + "\n")
+
+
+
+# --------------------------------------------------------------------------------
+# 9. Run the script by invoking it's main() function
+# --------------------------------------------------------------------------------
+if __name__ == "__main__":
+    main()
+
 
 
