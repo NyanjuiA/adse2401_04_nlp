@@ -426,15 +426,259 @@ class CreativeWriter:
 
         return self.index_to_word.get(predicted_index, self.PAD_TOKEN)
 
-        # -----------------------------------------------------------------------
-        # Step 9 – Generate text
-        # -----------------------------------------------------------------------
-        def generate_text(
-                self,
-                prompt: str,
-                num_words: int = 40,
-                temperature: float = 1.0,
-        ) -> str:
+    # -----------------------------------------------------------------------
+    # Step 9 – Generate text
+    # -----------------------------------------------------------------------
+    def generate_text(
+            self,
+            prompt: str,
+            num_words: int = 40,
+            temperature: float = 1.0,
+    ) -> str:
+
+        # Clean and tokenise the prompt so vocabulary look-ups succeed.
+        cleaned_prompt = self.clean_text(prompt)
+        context = [w for w in cleaned_prompt.split() if w]
+
+        # Keep a copy of the original prompt for final output.
+        generated_words = list(context)
+
+        for _ in range(num_words):
+            # Use only the most recent CONTEXT_SIZE words as context.
+            recent_context = generated_words[-self.CONTEXT_SIZE:]
+            next_word = self.predict_next_word(recent_context, temperature)
+
+            if next_word == self.PAD_TOKEN:
+                # When padding is returned, skip and try again with a small
+                # temperature nudge to avoid getting stuck.
+                continue
+
+            generated_words.append(next_word)
+
+        # Join all words into a single string and tidy up spacing.
+        result = " ".join(generated_words)
+
+        # Capitalise the very first character
+        if result:
+            result = result[0].upper() + result[1:]
+
+        return result
+
+    # -----------------------------------------------------------------------
+    # Display helper
+    # -----------------------------------------------------------------------
+    def display_generated_text(self, text: str, prompt: str) -> None:
+
+        print("\n" + "-" * 60)
+        print(f" Prompt: {prompt}")
+        print("-" * 60)
+        # Word-wrap the output at 58 characters for readability
+        words = text.split()
+        line = " "
+        for word in words:
+            if len(line) + len(word) + 1 > 60:
+                print(line)
+                line = " " + word + " "
+            else:
+                line += word + " "
+
+        if line.strip():
+            print(line)
+        print("-" * 60 + "\n")
+
+    # -----------------------------------------------------------------------
+    # Process a single prompt command
+    # -----------------------------------------------------------------------
+    def process_prompt(self, user_input: str) -> None:
+
+        # Extract the prompt text after the colon
+        parts = user_input.split(":", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            print("\n [!] Please provide a prompt after the word 'generate:'")
+            print("     Example: generate: Once upon a time\n")
+            return
+
+        prompt = parts[1].strip()
+        print("\n Temperature options: ")
+        print("    0.5  –  predictable and focused")
+        print("    0.8  –  balanced")
+        print("    1.0  –  standard (default)")
+        print("    1.2  –  creative and varied")
+        temp_input = input("\n  Enter temperature [press Enter for 1.0] : ").strip()
+
+        try:
+            temperature = float(temp_input) if temp_input else 1.0
+            if temperature <= 0:
+                raise ValueError("Temperature must be positive.")
+        except ValueError:
+            print("  [!] Invalid temperature – using 1.0")
+            temperature = 1.0
+
+        print(f"\n  Generating text (temperature = {temperature}) …")
+
+        generated = self.generate_text(prompt, num_words=40, temperature=temperature)
+        self.display_generated_text(generated, prompt)
+
+    # -----------------------------------------------------------------------
+    # Interactive chat loop
+    # -----------------------------------------------------------------------
+    def chat(self) -> None:
+        """Enter the interactive command-line loop.
+
+        Recognised commands
+        -------------------
+        generate: <prompt>
+            Generate a story continuation for the given prompt.
+        examples
+            Display a list of example prompts students can try.
+        help
+            Print the command reference.
+        exit
+            Quit the programme.
+        """
+        self._print_banner()
+
+        while True:
+            try:
+                user_input = input("  > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n\n  Goodbye!\n")
+                break
+
+            if not user_input:
+                continue
+
+            command = user_input.lower()
+
+            if command == "exit":
+                print("\n  Goodbye!\n")
+                break
+
+            elif command == "help":
+                self._print_help()
+
+            elif command == "examples":
+                self._print_examples()
+
+            elif command.startswith("generate"):
+                self.process_prompt(user_input)
+
+            else:
+                print(
+                    f"\n  [!] Unrecognised command: '{user_input}'\n"
+                    "      Type 'help' to see available commands.\n"
+                )
+
+    # -----------------------------------------------------------------------
+    # Static display helpers
+    # -----------------------------------------------------------------------
+    @staticmethod
+    def _print_banner() -> None:
+
+        print("\n" + '=' * 60)
+        print("  Creative Writing Assistant"
+              "\n Neural Language Model Demostration")
+        print("=" * 60 + "\n")
+        print("  Commands:")
+        print("    generate: <prompt>   –  generate a story continuation")
+        print("    examples             –  show example prompts")
+        print("    help                 –  show this message")
+        print("    exit                 –  quit the programme")
+        print()
+
+    @staticmethod
+    def _print_help() -> None:
+        """Print a brief command reference."""
+        print("\n" + "─" * 60)
+        print("  HELP")
+        print("─" * 60)
+        print("  generate: <prompt>")
+        print("      Generate a story continuation starting from <prompt>.")
+        print("      You will be asked to choose a sampling temperature.")
+        print()
+        print("  examples")
+        print("      Display a list of starter prompts to try.")
+        print()
+        print("  exit")
+        print("      Close the programme.")
+        print("─" * 60 + "\n")
+
+    @staticmethod
+    def _print_examples() -> None:
+        """Print a list of example prompts students can experiment with."""
+        print("\n" + "─" * 60)
+        print("  EXAMPLE PROMPTS")
+        print("─" * 60)
+        examples = [
+            "Once upon a time",
+            "The library was silent",
+            "The detective discovered",
+            "In the ancient kingdom",
+            "In the year 2200",
+            "The old door creaked open",
+            "She found the letter hidden",
+            "Deep in the forest",
+        ]
+        for prompt in examples:
+            print(f"    generate: {prompt}")
+        print("─" * 60 + "\n")
+
+# --------------------------------------------------------------------------------
+# 3. Main Execution Function
+# --------------------------------------------------------------------------------
+def main() -> None:
+
+    try:
+        assistant = CreativeWriter()
+
+        print("\n" + "=" * 60)
+        print("   Creative Writing Assistant -  Setup")
+        print("=" * 60)
+
+        # -- Step 1: Load Corpus ------------------------------------------------------
+        print("[ Step 1 ] Loading corpus...")
+        if not assistant.load_corpus():
+            sys.exit(1)
+
+        # -- Step 2 & 3: Tokenise ------------------------------------------------------
+        print("[ Step 2 & 3 ] Tokenising text...")
+        assistant.tokenise_text()
+
+        # -- Step 4: Build Vocabulary ------------------------------------------------------
+        print("[ Step 4 ] Building vocabulary...")
+        assistant.build_vocabulary()
+
+        # -- Step 5: Create training sequences ------------------------------------------------------
+        print("[ Step 5 ] Creating training sequences...")
+        assistant.create_training_sequences()
+
+        # -- Step 6: Build model ------------------------------------------------------
+        print("[ Step 6 ] Building model...")
+        assistant.build_model()
+
+        # -- Step 7: Train model ------------------------------------------------------
+        print("[ Step 7 ] Training model...")
+        assistant.train_model()
+
+        # -- Step 8: Start Interactive loop ---------------------------------------------
+        assistant.chat()
+
+
+    except Exception as exc:
+        print(f"\nFATAL ERROR: An unexpected error occurred: "
+              f"\n{exc}\nPlease check your corpus file and try again.\n")
+        sys.exit(1)
+
+
+# --------------------------------------------------------------------------------
+# 4. Run the script by invoking it's main() function
+# --------------------------------------------------------------------------------
+if __name__ == "__main__":
+    main()
+
+
+
+
 
 
 
